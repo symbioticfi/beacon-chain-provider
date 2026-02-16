@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package votingpower.v1;
+
+option go_package = "github.com/symbioticfi/beacon-chain-provider/api/gen/votingpower/v1;votingpowerv1";
+
+service VotingPowerProviderService {
+  rpc GetVotingPowersAt(GetVotingPowersAtRequest) returns (GetVotingPowersAtResponse);
+}
+
+message GetVotingPowersAtRequest {
+  uint64 timestamp = 1;
+}
+
+message OperatorVotingPower {
+  string operator = 1;
+  string voting_power = 2;
+}
+
+message GetVotingPowersAtResponse {
+  repeated OperatorVotingPower voting_powers = 1;
+}
