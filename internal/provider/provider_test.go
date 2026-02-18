@@ -2,7 +2,11 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -17,7 +21,7 @@ type mockBeacon struct {
 	errGenesis     error
 	errFinalized   error
 	errValidators  error
-	existsByState  map[string]bool
+	errByState     map[string]error
 	stateIDs       []string
 	statuses       [][]string
 	ids            [][]string
@@ -27,16 +31,15 @@ func (m *mockBeacon) GetGenesis(context.Context) (uint64, error) { return m.gene
 func (m *mockBeacon) GetFinalizedSlot(context.Context) (uint64, error) {
 	return m.finalizedSlot, m.errFinalized
 }
-func (m *mockBeacon) StateExists(_ context.Context, stateID string) (bool, error) {
-	if m.existsByState == nil {
-		return true, nil
-	}
-	return m.existsByState[stateID], nil
-}
 func (m *mockBeacon) GetValidatorsByState(_ context.Context, stateID string, statuses []string, ids []string) ([]types.BeaconValidator, error) {
 	m.stateIDs = append(m.stateIDs, stateID)
 	m.statuses = append(m.statuses, append([]string(nil), statuses...))
 	m.ids = append(m.ids, append([]string(nil), ids...))
+	if m.errByState != nil {
+		if err := m.errByState[stateID]; err != nil {
+			return nil, err
+		}
+	}
 	if m.errValidators != nil {
 		return nil, m.errValidators
 	}
@@ -65,7 +68,6 @@ func TestGetVotingPowersAt_AggregatesAndSorts(t *testing.T) {
 	beacon := &mockBeacon{
 		genesis:       1000,
 		finalizedSlot: 10_000,
-		existsByState: map[string]bool{"64": true},
 		validatorsByID: map[string]types.BeaconValidator{
 			pubkeyHex(1): {Pubkey: pubkeyHex(1), EffectiveBalance: 32_000_000_000},
 			pubkeyHex(2): {Pubkey: pubkeyHex(2), EffectiveBalance: 31_000_000_000},
@@ -85,7 +87,7 @@ func TestGetVotingPowersAt_AggregatesAndSorts(t *testing.T) {
 	require.Equal(t, 3, meta.MatchedValidator)
 	require.Equal(t, 2, meta.OperatorCount)
 	require.Equal(t, []string{"64"}, beacon.stateIDs)
-	require.Equal(t, []string{"active_ongoing", "active_exiting", "active_slashed"}, beacon.statuses[0])
+	require.Nil(t, beacon.statuses[0])
 
 	require.Len(t, got, 2)
 	require.Equal(t, opA, got[0].Operator)
@@ -153,7 +155,7 @@ func TestGetVotingPowersAt_ChunksBeaconRequestsByID(t *testing.T) {
 		validators[id] = types.BeaconValidator{Pubkey: id, EffectiveBalance: 1}
 	}
 
-	beacon := &mockBeacon{genesis: 1, finalizedSlot: 10_000, existsByState: map[string]bool{"0": true}, validatorsByID: validators}
+	beacon := &mockBeacon{genesis: 1, finalizedSlot: 10_000, validatorsByID: validators}
 	p := New(beacon, &mockKeyRegistry{ops: []types.OperatorWithKeys{{Operator: op, Keys: keys}}})
 	got, _, err := p.GetVotingPowersAt(context.Background(), 1)
 	require.NoError(t, err)
@@ -164,8 +166,8 @@ func TestGetVotingPowersAt_ChunksBeaconRequestsByID(t *testing.T) {
 	require.Len(t, beacon.ids[0], 1000)
 	require.Len(t, beacon.ids[1], 1)
 	require.Equal(t, []string{"0", "0"}, beacon.stateIDs)
-	require.Equal(t, []string{"active_ongoing", "active_exiting", "active_slashed"}, beacon.statuses[0])
-	require.Equal(t, []string{"active_ongoing", "active_exiting", "active_slashed"}, beacon.statuses[1])
+	require.Nil(t, beacon.statuses[0])
+	require.Nil(t, beacon.statuses[1])
 }
 
 func TestGetVotingPowersAt_EmptyKeySetSkipsBeaconFetch(t *testing.T) {
@@ -210,7 +212,7 @@ func TestGetVotingPowersAt_UpstreamErrorsWrapped(t *testing.T) {
 	require.ErrorContains(t, err, "boom")
 }
 
-func TestGetVotingPowersAt_FallsBackToPreviousSlotWhenStateMissing(t *testing.T) {
+func TestGetVotingPowersAt_DecrementsSlotUntilStateExists(t *testing.T) {
 	op := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	pk := pubkeyBytes(10)
 	id := pubkeyHexFromBytes(pk)
@@ -218,7 +220,7 @@ func TestGetVotingPowersAt_FallsBackToPreviousSlotWhenStateMissing(t *testing.T)
 	beacon := &mockBeacon{
 		genesis:       1000,
 		finalizedSlot: 10_000,
-		existsByState: map[string]bool{"64": false, "63": true},
+		errByState: map[string]error{"64": fakeNotFound{}},
 		validatorsByID: map[string]types.BeaconValidator{
 			id: {Pubkey: id, EffectiveBalance: 32000000000},
 		},
@@ -233,7 +235,7 @@ func TestGetVotingPowersAt_FallsBackToPreviousSlotWhenStateMissing(t *testing.T)
 	require.Len(t, got, 1)
 	require.Equal(t, uint64(32000000000), got[0].VotingPowerGwei)
 	require.Equal(t, uint64(63), meta.Slot)
-	require.Equal(t, []string{"63"}, beacon.stateIDs)
+	require.Equal(t, []string{"64", "63"}, beacon.stateIDs)
 }
 
 func TestGetVotingPowersAt_ReturnsPreconditionWhenNoStateExists(t *testing.T) {
@@ -243,7 +245,7 @@ func TestGetVotingPowersAt_ReturnsPreconditionWhenNoStateExists(t *testing.T) {
 	beacon := &mockBeacon{
 		genesis:       1000,
 		finalizedSlot: 10_000,
-		existsByState: map[string]bool{"0": false},
+		errByState:    map[string]error{"0": fakeNotFound{}},
 	}
 
 	p := New(beacon, &mockKeyRegistry{
@@ -253,6 +255,122 @@ func TestGetVotingPowersAt_ReturnsPreconditionWhenNoStateExists(t *testing.T) {
 	_, _, err := p.GetVotingPowersAt(context.Background(), 1000)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrEpochNotFinalized)
+}
+
+type fakeNotFound struct{}
+
+func (fakeNotFound) Error() string  { return "not found" }
+func (fakeNotFound) NotFound() bool { return true }
+
+func TestGetVotingPowersAt_FallsBackWhenValidatorsStateMissing(t *testing.T) {
+	op := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	pk := pubkeyBytes(12)
+	id := pubkeyHexFromBytes(pk)
+
+	beacon := &mockBeacon{
+		genesis:       1000,
+		finalizedSlot: 10_000,
+		errByState:    map[string]error{"64": fakeNotFound{}},
+		validatorsByID: map[string]types.BeaconValidator{
+			id: {Pubkey: id, EffectiveBalance: 32000000000},
+		},
+	}
+
+	p := New(beacon, &mockKeyRegistry{
+		ops: []types.OperatorWithKeys{{Operator: op, Keys: []types.Key{{Payload: pk}}}},
+	})
+
+	got, meta, err := p.GetVotingPowersAt(context.Background(), 1000+2*384)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, uint64(32000000000), got[0].VotingPowerGwei)
+	require.Equal(t, uint64(63), meta.Slot)
+	require.Equal(t, []string{"64", "63"}, beacon.stateIDs)
+}
+
+func TestGetVotingPowersAt_MockMap_DeterministicMapping(t *testing.T) {
+	opA := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	opB := common.HexToAddress("0x00000000000000000000000000000000000000bb")
+
+	keysPath := writeHoodiKeysFile(t, []string{pubkeyHex(1), pubkeyHex(2), pubkeyHex(3)})
+
+	beacon := &mockBeacon{
+		genesis:       1,
+		finalizedSlot: 10_000,
+		validatorsByID: map[string]types.BeaconValidator{
+			pubkeyHex(1): {Pubkey: pubkeyHex(1), EffectiveBalance: 101},
+			pubkeyHex(2): {Pubkey: pubkeyHex(2), EffectiveBalance: 202},
+			pubkeyHex(3): {Pubkey: pubkeyHex(3), EffectiveBalance: 303},
+		},
+	}
+
+	p := New(beacon, &mockKeyRegistry{
+		ops: []types.OperatorWithKeys{
+			{Operator: opA, Keys: []types.Key{{Payload: pubkeyBytes(11)}}},
+			{Operator: opB, Keys: []types.Key{{Payload: pubkeyBytes(22)}}},
+		},
+	}, WithMockMap(keysPath))
+
+	got1, _, err := p.GetVotingPowersAt(context.Background(), 1)
+	require.NoError(t, err)
+	got2, _, err := p.GetVotingPowersAt(context.Background(), 1)
+	require.NoError(t, err)
+	require.Equal(t, got1, got2)
+	require.Len(t, got1, 2)
+
+	sums := map[common.Address]uint64{
+		got1[0].Operator: got1[0].VotingPowerGwei,
+		got1[1].Operator: got1[1].VotingPowerGwei,
+	}
+	require.Contains(t, []uint64{101, 202, 303}, sums[opA])
+	require.Contains(t, []uint64{101, 202, 303}, sums[opB])
+	require.NotEqual(t, uint64(0), sums[opA])
+	require.NotEqual(t, uint64(0), sums[opB])
+}
+
+func TestGetVotingPowersAt_MockMap_FailsWhenNotEnoughHoodiKeys(t *testing.T) {
+	keysPath := writeHoodiKeysFile(t, []string{pubkeyHex(1)})
+
+	p := New(&mockBeacon{genesis: 1, finalizedSlot: 10_000}, &mockKeyRegistry{
+		ops: []types.OperatorWithKeys{
+			{Operator: common.HexToAddress("0x0000000000000000000000000000000000000001"), Keys: []types.Key{{Payload: pubkeyBytes(11)}}},
+			{Operator: common.HexToAddress("0x0000000000000000000000000000000000000002"), Keys: []types.Key{{Payload: pubkeyBytes(22)}}},
+		},
+	}, WithMockMap(keysPath))
+
+	_, _, err := p.GetVotingPowersAt(context.Background(), 1)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrMockMapInsufficientKeys)
+}
+
+func TestGetVotingPowersAt_MockMap_AssignsKeysForOperatorsWithoutKeys(t *testing.T) {
+	opA := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	opB := common.HexToAddress("0x00000000000000000000000000000000000000bb")
+
+	keysPath := writeHoodiKeysFile(t, []string{pubkeyHex(1), pubkeyHex(2), pubkeyHex(3)})
+
+	beacon := &mockBeacon{
+		genesis:       1,
+		finalizedSlot: 10_000,
+		validatorsByID: map[string]types.BeaconValidator{
+			pubkeyHex(1): {Pubkey: pubkeyHex(1), EffectiveBalance: 111},
+			pubkeyHex(2): {Pubkey: pubkeyHex(2), EffectiveBalance: 222},
+			pubkeyHex(3): {Pubkey: pubkeyHex(3), EffectiveBalance: 333},
+		},
+	}
+
+	p := New(beacon, &mockKeyRegistry{
+		ops: []types.OperatorWithKeys{
+			{Operator: opA, Keys: nil},
+			{Operator: opB, Keys: nil},
+		},
+	}, WithMockMap(keysPath))
+
+	got, _, err := p.GetVotingPowersAt(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.NotEqual(t, uint64(0), got[0].VotingPowerGwei)
+	require.NotEqual(t, uint64(0), got[1].VotingPowerGwei)
 }
 
 func pubkeyBytes(seed byte) []byte {
@@ -278,4 +396,24 @@ func pubkeyHexFromBytes(b []byte) string {
 		out[2+i*2+1] = hexChars[v&0x0f]
 	}
 	return string(out)
+}
+
+func writeHoodiKeysFile(t *testing.T, keys []string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hoodi.json")
+
+	payload := "[\n"
+	for i, key := range keys {
+		if i > 0 {
+			payload += ",\n"
+		}
+		payload += `  {"index": ` + strconv.Itoa(i) + `, "pubkey": "` + key + `"}`
+	}
+	payload += "\n]\n"
+
+	var decoded []map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(payload), &decoded))
+	require.NoError(t, os.WriteFile(path, []byte(payload), 0o644))
+	return path
 }

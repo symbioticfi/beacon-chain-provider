@@ -53,6 +53,9 @@ type AppConfig struct {
 	Log struct {
 		Level string `mapstructure:"level"`
 	} `mapstructure:"log"`
+	Provider struct {
+		Mock bool `mapstructure:"mock"`
+	} `mapstructure:"provider"`
 }
 
 func (c AppConfig) Validate() error {
@@ -68,7 +71,7 @@ func (c AppConfig) Validate() error {
 	if c.KeyRegistry.ChainID == 0 {
 		return errors.New("key_registry.chain_id is required")
 	}
-	if symbiotic.KeyTag(c.KeyRegistry.KeyTag).Type() != symbiotic.KeyTypeBls12381 {
+	if !c.Provider.Mock && symbiotic.KeyTag(c.KeyRegistry.KeyTag).Type() != symbiotic.KeyTypeBls12381 {
 		return errors.New("key_registry.key_tag must be BLS12-381 type")
 	}
 	return nil
@@ -113,6 +116,7 @@ func addRootFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().Uint8("key_registry.key_tag", 0, "Key tag filter")
 	cmd.PersistentFlags().Duration("timeouts.request", defaultRequestTimeout, "Request timeout")
 	cmd.PersistentFlags().String("log.level", defaultLogLevel, "Log level")
+	cmd.PersistentFlags().Bool("provider.mock", false, "Enable deterministic mock mapping from operators to hoodi beacon pubkeys")
 }
 
 func initConfig(cmd *cobra.Command, cfg *AppConfig) error {
@@ -120,6 +124,9 @@ func initConfig(cmd *cobra.Command, cfg *AppConfig) error {
 	v.SetEnvPrefix("BEACON_VP")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	v.AutomaticEnv()
+	v.SetDefault("grpc.listen", defaultGRPCListen)
+	v.SetDefault("timeouts.request", defaultRequestTimeout)
+	v.SetDefault("log.level", defaultLogLevel)
 
 	if err := v.BindPFlags(cmd.Flags()); err != nil {
 		return fmt.Errorf("bind flags: %w", err)
@@ -143,21 +150,7 @@ func initConfig(cmd *cobra.Command, cfg *AppConfig) error {
 		return fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	applyDefaults(cfg)
-
 	return cfg.Validate()
-}
-
-func applyDefaults(cfg *AppConfig) {
-	if cfg.GRPC.Listen == "" {
-		cfg.GRPC.Listen = defaultGRPCListen
-	}
-	if cfg.Timeouts.Request <= 0 {
-		cfg.Timeouts.Request = defaultRequestTimeout
-	}
-	if cfg.Log.Level == "" {
-		cfg.Log.Level = defaultLogLevel
-	}
 }
 
 func runApp(ctx context.Context, cfg AppConfig) error {
@@ -174,8 +167,13 @@ func runApp(ctx context.Context, cfg AppConfig) error {
 		return err
 	}
 
-	evaluator := provider.New(beaconClient, keyRegistryClient)
-	grpcService := server.NewGRPCServer(logger, evaluator)
+	options := make([]provider.Option, 0, 1)
+	if cfg.Provider.Mock {
+		options = append(options, provider.WithMockMap(""))
+	}
+	options = append(options, provider.WithLogger(logger))
+	votingProvider := provider.New(beaconClient, keyRegistryClient, options...)
+	grpcService := server.NewGRPCServer(logger, votingProvider)
 
 	lis, err := net.Listen("tcp", cfg.GRPC.Listen)
 	if err != nil {

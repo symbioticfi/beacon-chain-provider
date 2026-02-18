@@ -15,12 +15,12 @@ import (
 
 type GRPCServer struct {
 	votingpowerv1.UnimplementedVotingPowerProviderServiceServer
-	logger    *slog.Logger
-	evaluator *provider.Provider
+	logger   *slog.Logger
+	provider *provider.Provider
 }
 
-func NewGRPCServer(logger *slog.Logger, evaluator *provider.Provider) *GRPCServer {
-	return &GRPCServer{logger: logger, evaluator: evaluator}
+func NewGRPCServer(logger *slog.Logger, provider *provider.Provider) *GRPCServer {
+	return &GRPCServer{logger: logger, provider: provider}
 }
 
 func (s *GRPCServer) GetVotingPowersAt(ctx context.Context, req *votingpowerv1.GetVotingPowersAtRequest) (*votingpowerv1.GetVotingPowersAtResponse, error) {
@@ -28,7 +28,7 @@ func (s *GRPCServer) GetVotingPowersAt(ctx context.Context, req *votingpowerv1.G
 		return nil, status.Error(codes.InvalidArgument, "request is required")
 	}
 
-	result, meta, err := s.evaluator.GetVotingPowersAt(ctx, req.GetTimestamp())
+	result, meta, err := s.provider.GetVotingPowersAt(ctx, req.GetTimestamp())
 	if err != nil {
 		code, msg := mapProviderError(err)
 		s.logger.WarnContext(ctx, "GetVotingPowersAt failed", "timestamp", req.GetTimestamp(), "code", code.String(), "error", err)
@@ -59,7 +59,7 @@ func mapProviderError(err error) (codes.Code, string) {
 	if errors.Is(err, provider.ErrMalformedRequest) || errors.Is(err, provider.ErrTimestampBeforeGenesis) {
 		return codes.InvalidArgument, err.Error()
 	}
-	if errors.Is(err, provider.ErrEpochNotFinalized) || errors.Is(err, provider.ErrDuplicatePubkeyOwnership) {
+	if errors.Is(err, provider.ErrEpochNotFinalized) || errors.Is(err, provider.ErrDuplicatePubkeyOwnership) || errors.Is(err, provider.ErrMockMapInsufficientKeys) {
 		return codes.FailedPrecondition, err.Error()
 	}
 	if errors.Is(err, context.DeadlineExceeded) {

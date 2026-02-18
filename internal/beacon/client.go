@@ -19,7 +19,6 @@ const (
 	pathGenesis          = "/eth/v1/beacon/genesis"
 	pathFinalizedHeader  = "/eth/v1/beacon/headers/finalized"
 	pathStateValidators  = "/eth/v1/beacon/states/%s/validators"
-	pathStateRoot        = "/eth/v1/beacon/states/%s/root"
 	maxErrorBodyReadSize = 2048
 )
 
@@ -69,12 +68,6 @@ type validatorData struct {
 
 type validatorsResponse struct {
 	Data []validatorData `json:"data"`
-}
-
-type stateRootResponse struct {
-	Data struct {
-		Root string `json:"root"`
-	} `json:"data"`
 }
 
 type Client struct {
@@ -140,17 +133,6 @@ func (c *Client) GetValidatorsByState(ctx context.Context, stateID string, statu
 		})
 	}
 	return out, nil
-}
-
-func (c *Client) StateExists(ctx context.Context, stateID string) (bool, error) {
-	var resp stateRootResponse
-	if err := c.get(ctx, fmt.Sprintf(pathStateRoot, stateID), nil, &resp); err != nil {
-		if IsNotFoundError(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
 }
 
 func (c *Client) get(ctx context.Context, path string, query url.Values, out interface{}) error {

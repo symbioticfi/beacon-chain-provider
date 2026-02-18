@@ -65,10 +65,12 @@ func TestClient_GetKeysAt_FiltersByTagAndUsesFinalizedBlock(t *testing.T) {
 	require.True(t, caller.calledOnce)
 	require.Equal(t, int64(123), caller.lastOpts.BlockNumber.Int64())
 	require.Equal(t, uint64(555), caller.lastTs.Uint64())
-	require.Len(t, got, 1)
+	require.Len(t, got, 2)
 	require.Equal(t, "0x0000000000000000000000000000000000000001", got[0].Operator.Hex())
 	require.Len(t, got[0].Keys, 1)
 	require.Equal(t, uint8(0x20), got[0].Keys[0].Tag)
+	require.Equal(t, "0x0000000000000000000000000000000000000002", got[1].Operator.Hex())
+	require.Empty(t, got[1].Keys)
 }
 
 func TestClient_VerifyChainID(t *testing.T) {

@@ -69,9 +69,6 @@ func (c *Client) GetKeysAt(ctx context.Context, timestamp uint64) ([]types.Opera
 			}
 			filtered = append(filtered, types.Key{Tag: k.Tag, Payload: k.Payload})
 		}
-		if len(filtered) == 0 {
-			continue
-		}
 		out = append(out, types.OperatorWithKeys{Operator: row.Operator, Keys: filtered})
 	}
 	return out, nil

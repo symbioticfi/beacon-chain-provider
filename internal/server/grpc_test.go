@@ -39,13 +39,6 @@ func (m *mockBeaconClient) GetFinalizedSlot(context.Context) (uint64, error) {
 	return m.finalizedSlot, nil
 }
 
-func (m *mockBeaconClient) StateExists(context.Context, string) (bool, error) {
-	if m.err != nil {
-		return false, m.err
-	}
-	return true, nil
-}
-
 func (m *mockBeaconClient) GetValidatorsByState(context.Context, string, []string, []string) ([]types.BeaconValidator, error) {
 	if m.err != nil {
 		return nil, m.err

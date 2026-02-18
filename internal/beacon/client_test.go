@@ -70,28 +70,3 @@ func TestClient_Non2xx(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "status=503")
 }
-
-func TestClient_StateExists(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/eth/v1/beacon/states/64/root", r.URL.Path)
-		_, _ = fmt.Fprint(w, `{"data":{"root":"0xabc"}}`)
-	}))
-	defer ts.Close()
-
-	c := NewClient(ts.URL, time.Second)
-	ok, err := c.StateExists(context.Background(), "64")
-	require.NoError(t, err)
-	require.True(t, ok)
-}
-
-func TestClient_StateExists_NotFound(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "not found", http.StatusNotFound)
-	}))
-	defer ts.Close()
-
-	c := NewClient(ts.URL, time.Second)
-	ok, err := c.StateExists(context.Background(), "64")
-	require.NoError(t, err)
-	require.False(t, ok)
-}
