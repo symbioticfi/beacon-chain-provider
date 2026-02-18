@@ -220,7 +220,7 @@ func TestGetVotingPowersAt_DecrementsSlotUntilStateExists(t *testing.T) {
 	beacon := &mockBeacon{
 		genesis:       1000,
 		finalizedSlot: 10_000,
-		errByState: map[string]error{"64": fakeNotFound{}},
+		errByState:    map[string]error{"64": fakeNotFound{}},
 		validatorsByID: map[string]types.BeaconValidator{
 			id: {Pubkey: id, EffectiveBalance: 32000000000},
 		},
