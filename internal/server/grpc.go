@@ -59,7 +59,7 @@ func mapProviderError(err error) (codes.Code, string) {
 	if errors.Is(err, provider.ErrMalformedRequest) || errors.Is(err, provider.ErrTimestampBeforeGenesis) {
 		return codes.InvalidArgument, err.Error()
 	}
-	if errors.Is(err, provider.ErrEpochNotFinalized) || errors.Is(err, provider.ErrDuplicatePubkeyOwnership) || errors.Is(err, provider.ErrMockMapInsufficientKeys) {
+	if errors.Is(err, provider.ErrEpochNotFinalized) || errors.Is(err, provider.ErrDuplicatePubkeyOwnership) {
 		return codes.FailedPrecondition, err.Error()
 	}
 	if errors.Is(err, context.DeadlineExceeded) {

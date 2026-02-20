@@ -33,6 +33,7 @@ const (
 )
 
 type AppConfig struct {
+	Mock bool `mapstructure:"mock"`
 	GRPC struct {
 		Listen string `mapstructure:"listen"`
 	} `mapstructure:"grpc"`
@@ -53,9 +54,6 @@ type AppConfig struct {
 	Log struct {
 		Level string `mapstructure:"level"`
 	} `mapstructure:"log"`
-	Provider struct {
-		Mock bool `mapstructure:"mock"`
-	} `mapstructure:"provider"`
 }
 
 func (c AppConfig) Validate() error {
@@ -71,7 +69,7 @@ func (c AppConfig) Validate() error {
 	if c.KeyRegistry.ChainID == 0 {
 		return errors.New("key_registry.chain_id is required")
 	}
-	if !c.Provider.Mock && symbiotic.KeyTag(c.KeyRegistry.KeyTag).Type() != symbiotic.KeyTypeBls12381 {
+	if symbiotic.KeyTag(c.KeyRegistry.KeyTag).Type() != symbiotic.KeyTypeBls12381 {
 		return errors.New("key_registry.key_tag must be BLS12-381 type")
 	}
 	return nil
@@ -108,6 +106,7 @@ func NewRootCommand() *cobra.Command {
 
 func addRootFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().String("config", defaultConfigPath, "Path to YAML config file")
+	cmd.PersistentFlags().Bool("mock", false, "Enable deterministic mock mapping for demo environments")
 	cmd.PersistentFlags().String("grpc.listen", defaultGRPCListen, "gRPC listen address")
 	cmd.PersistentFlags().String("beacon.node_url", "", "Beacon node URL")
 	cmd.PersistentFlags().String("ethereum.rpc_url", "", "Ethereum RPC URL")
@@ -116,7 +115,6 @@ func addRootFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().Uint8("key_registry.key_tag", 0, "Key tag filter")
 	cmd.PersistentFlags().Duration("timeouts.request", defaultRequestTimeout, "Request timeout")
 	cmd.PersistentFlags().String("log.level", defaultLogLevel, "Log level")
-	cmd.PersistentFlags().Bool("provider.mock", false, "Enable deterministic mock mapping from operators to hoodi beacon pubkeys")
 }
 
 func initConfig(cmd *cobra.Command, cfg *AppConfig) error {
@@ -125,6 +123,7 @@ func initConfig(cmd *cobra.Command, cfg *AppConfig) error {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	v.AutomaticEnv()
 	v.SetDefault("grpc.listen", defaultGRPCListen)
+	v.SetDefault("mock", false)
 	v.SetDefault("timeouts.request", defaultRequestTimeout)
 	v.SetDefault("log.level", defaultLogLevel)
 
@@ -167,11 +166,7 @@ func runApp(ctx context.Context, cfg AppConfig) error {
 		return err
 	}
 
-	options := make([]provider.Option, 0, 1)
-	if cfg.Provider.Mock {
-		options = append(options, provider.WithMockMap(""))
-	}
-	options = append(options, provider.WithLogger(logger))
+	options := []provider.Option{provider.WithLogger(logger), provider.WithMock(cfg.Mock)}
 	votingProvider := provider.New(beaconClient, keyRegistryClient, options...)
 	grpcService := server.NewGRPCServer(logger, votingProvider)
 

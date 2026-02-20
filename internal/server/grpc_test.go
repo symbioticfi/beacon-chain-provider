@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	votingpowerv1 "github.com/symbioticfi/beacon-chain-provider/api/proto/votingpower/v1"
 	"github.com/symbioticfi/beacon-chain-provider/internal/provider"
+	"github.com/symbioticfi/beacon-chain-provider/internal/testutil"
 	"github.com/symbioticfi/beacon-chain-provider/internal/types"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -66,14 +67,14 @@ func TestGRPCServer_EndToEndBufconn(t *testing.T) {
 		genesis:       1000,
 		finalizedSlot: 10_000,
 		validators: []types.BeaconValidator{
-			{Pubkey: pubkeyHex(1), EffectiveBalance: 20},
-			{Pubkey: pubkeyHex(2), EffectiveBalance: 10},
+			{Pubkey: testutil.PubkeyHex(1), EffectiveBalance: 20},
+			{Pubkey: testutil.PubkeyHex(2), EffectiveBalance: 10},
 		},
 	}
 	keyRegistry := &mockKeyRegistryClient{
 		ops: []types.OperatorWithKeys{
-			{Operator: common.HexToAddress("0x0000000000000000000000000000000000000001"), Keys: []types.Key{{Payload: pubkeyBytes(1)}}},
-			{Operator: common.HexToAddress("0x0000000000000000000000000000000000000002"), Keys: []types.Key{{Payload: pubkeyBytes(2)}}},
+			{Operator: common.HexToAddress("0x0000000000000000000000000000000000000001"), Keys: []types.Key{{Payload: testutil.PubkeyBytes(1)}}},
+			{Operator: common.HexToAddress("0x0000000000000000000000000000000000000002"), Keys: []types.Key{{Payload: testutil.PubkeyBytes(2)}}},
 		},
 	}
 	votingpowerv1.RegisterVotingPowerProviderServiceServer(gs, NewGRPCServer(slog.Default(), provider.New(beacon, keyRegistry)))
@@ -128,25 +129,4 @@ func TestGRPCServer_NilRequest(t *testing.T) {
 	_, err := s.GetVotingPowersAt(context.Background(), nil)
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
-}
-
-func pubkeyBytes(seed byte) []byte {
-	out := make([]byte, 48)
-	for i := range out {
-		out[i] = seed
-	}
-	return out
-}
-
-func pubkeyHex(seed byte) string {
-	b := pubkeyBytes(seed)
-	const hexChars = "0123456789abcdef"
-	out := make([]byte, 2+len(b)*2)
-	out[0] = '0'
-	out[1] = 'x'
-	for i, v := range b {
-		out[2+i*2] = hexChars[v>>4]
-		out[2+i*2+1] = hexChars[v&0x0f]
-	}
-	return string(out)
 }

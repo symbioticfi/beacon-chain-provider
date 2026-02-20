@@ -1,4 +1,7 @@
 /beacon-vp
 .DS_Store
 /bin/
-/temp-network/
+/broadcast/
+/cache/
+/out/
+/node_modules/

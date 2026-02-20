@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test
+  test-and-build:
+    name: Test & Build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,19 +25,6 @@ jobs:
 
       - name: Run Tests
         run: go test ./...
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
 
       - name: Build Binary
         run: go build ./cmd/beacon-vp

@@ -35,12 +35,16 @@ func (e *httpStatusError) NotFound() bool {
 	return e.StatusCode == http.StatusNotFound
 }
 
+type notFounder interface {
+	NotFound() bool
+}
+
 func IsNotFoundError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var statusErr *httpStatusError
-	return errors.As(err, &statusErr) && statusErr.NotFound()
+	var nf notFounder
+	return errors.As(err, &nf) && nf.NotFound()
 }
 
 type genesisResponse struct {

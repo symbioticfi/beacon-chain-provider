@@ -2,8 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,10 +9,8 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	beaconapi "github.com/symbioticfi/beacon-chain-provider/internal/beacon"
 	"github.com/symbioticfi/beacon-chain-provider/internal/types"
 )
@@ -23,7 +19,7 @@ const (
 	secondsPerEpoch    = uint64(384)
 	slotsPerEpoch      = uint64(32)
 	idChunkSize        = 1000
-	defaultMockMapPath = "demo/hoodi_validators_50.json"
+	maxStateLookback   = uint64(4)
 )
 
 var (
@@ -31,7 +27,6 @@ var (
 	ErrTimestampBeforeGenesis   = errors.New("timestamp before genesis")
 	ErrEpochNotFinalized        = errors.New("epoch not finalized")
 	ErrDuplicatePubkeyOwnership = errors.New("duplicate pubkey ownership")
-	ErrMockMapInsufficientKeys  = errors.New("insufficient hoodi keys for mock map")
 	ErrUpstream                 = errors.New("upstream failure")
 )
 
@@ -45,19 +40,11 @@ type KeyRegistryClient interface {
 	GetKeysAt(ctx context.Context, timestamp uint64) ([]types.OperatorWithKeys, error)
 }
 
-type notFoundError interface {
-	NotFound() bool
-}
-
 type Provider struct {
 	beacon      BeaconClient
 	keyRegistry KeyRegistryClient
 	logger      *slog.Logger
-	mockMapPath string
-
-	mockMapOnce    sync.Once
-	mockMapPubkeys [][]byte
-	mockMapErr     error
+	mock        bool
 }
 
 type EvaluationMeta struct {
@@ -69,21 +56,17 @@ type EvaluationMeta struct {
 
 type Option func(*Provider)
 
-func WithMockMap(path string) Option {
-	return func(p *Provider) {
-		if path == "" {
-			p.mockMapPath = defaultMockMapPath
-			return
-		}
-		p.mockMapPath = path
-	}
-}
-
 func WithLogger(logger *slog.Logger) Option {
 	return func(p *Provider) {
 		if logger != nil {
 			p.logger = logger
 		}
+	}
+}
+
+func WithMock(enabled bool) Option {
+	return func(p *Provider) {
+		p.mock = enabled
 	}
 }
 
@@ -143,14 +126,6 @@ func (p *Provider) GetVotingPowersAt(ctx context.Context, timestamp uint64) ([]t
 		return nil, EvaluationMeta{}, fmt.Errorf("%w: key registry: %w", ErrUpstream, err)
 	}
 	p.logger.DebugContext(ctx, "loaded operator keys", "operator_rows", len(ops))
-	if p.mockMapPath != "" {
-		ops, err = p.applyMockMap(ops)
-		if err != nil {
-			p.logger.WarnContext(ctx, "failed applying mock map", "path", p.mockMapPath, "error", err)
-			return nil, EvaluationMeta{}, err
-		}
-		p.logger.DebugContext(ctx, "applied mock map", "path", p.mockMapPath)
-	}
 
 	pubkeyToOperator := make(map[string]common.Address)
 	for _, op := range ops {
@@ -170,6 +145,10 @@ func (p *Provider) GetVotingPowersAt(ctx context.Context, timestamp uint64) ([]t
 	p.logger.DebugContext(ctx, "built pubkey index", "pubkey_count", len(pubkeyToOperator))
 
 	if len(pubkeyToOperator) == 0 {
+		if p.mock {
+			p.logger.InfoContext(ctx, "mock mode enabled, deriving voting powers by validator index", "operator_rows", len(ops))
+			return p.computeMockVotingPowers(ctx, epoch, slot, finalizedSlot, ops)
+		}
 		p.logger.InfoContext(ctx, "no operator keys matched configured tag", "timestamp", timestamp, "epoch", epoch, "slot", slot)
 		return []types.OperatorVotingPower{}, EvaluationMeta{Epoch: epoch, Slot: slot, MatchedValidator: 0, OperatorCount: 0}, nil
 	}
@@ -180,7 +159,7 @@ func (p *Provider) GetVotingPowersAt(ctx context.Context, timestamp uint64) ([]t
 	}
 	sort.Strings(ids)
 
-	validators, stateSlot, err := p.fetchValidatorsAtOrBeforeSlot(ctx, slot, ids)
+	validators, stateSlot, err := p.fetchValidatorsAtOrBeforeSlot(ctx, slot, finalizedSlot, ids)
 	if err != nil {
 		if errors.Is(err, ErrEpochNotFinalized) {
 			return nil, EvaluationMeta{}, err
@@ -230,109 +209,61 @@ func (p *Provider) GetVotingPowersAt(ctx context.Context, timestamp uint64) ([]t
 	return out, EvaluationMeta{Epoch: epoch, Slot: stateSlot, MatchedValidator: matched, OperatorCount: len(out)}, nil
 }
 
-type hoodiValidatorRecord struct {
-	Index  uint64 `json:"index"`
-	Pubkey string `json:"pubkey"`
-}
+func (p *Provider) computeMockVotingPowers(ctx context.Context, epoch, slot, finalizedSlot uint64, ops []types.OperatorWithKeys) ([]types.OperatorVotingPower, EvaluationMeta, error) {
+	operators := sortedOperators(ops)
+	if len(operators) == 0 {
+		return []types.OperatorVotingPower{}, EvaluationMeta{Epoch: epoch, Slot: slot, MatchedValidator: 0, OperatorCount: 0}, nil
+	}
 
-func (p *Provider) applyMockMap(ops []types.OperatorWithKeys) ([]types.OperatorWithKeys, error) {
-	pubkeys, err := p.loadMockMapPubkeys()
+	stateID, stateSlot, err := p.resolveStateIDAtOrBeforeSlot(ctx, slot, finalizedSlot, []string{"0"})
 	if err != nil {
-		return nil, fmt.Errorf("load mock map keys: %w", err)
+		return nil, EvaluationMeta{}, fmt.Errorf("%w: beacon validators: %w", ErrUpstream, err)
 	}
 
-	operatorSet := make(map[common.Address]struct{})
-	for _, op := range ops {
-		operatorSet[op.Operator] = struct{}{}
-	}
-	if len(operatorSet) > len(pubkeys) {
-		return nil, fmt.Errorf("%w: operators=%d keys=%d", ErrMockMapInsufficientKeys, len(operatorSet), len(pubkeys))
-	}
-
-	operators := make([]common.Address, 0, len(operatorSet))
-	for op := range operatorSet {
-		operators = append(operators, op)
-	}
-	sort.Slice(operators, func(i, j int) bool { return operators[i].Hex() < operators[j].Hex() })
-
-	used := make([]bool, len(pubkeys))
-	assignments := make(map[common.Address][]byte, len(operators))
-	for _, op := range operators {
-		hash := crypto.Keccak256Hash(op.Bytes())
-		start := int(hash.Big().Uint64() % uint64(len(pubkeys)))
-		idx := start
-		for {
-			if !used[idx] {
-				used[idx] = true
-				assignments[op] = pubkeys[idx]
-				break
-			}
-			idx = (idx + 1) % len(pubkeys)
-			if idx == start {
-				return nil, fmt.Errorf("%w: exhausted key slots", ErrMockMapInsufficientKeys)
-			}
+	out := make([]types.OperatorVotingPower, 0, len(operators))
+	matched := 0
+	for i, op := range operators {
+		id := strconv.Itoa(i)
+		rows, err := p.fetchValidatorsByStateID(ctx, stateID, []string{id})
+		if err != nil {
+			return nil, EvaluationMeta{}, fmt.Errorf("%w: beacon validators: %w", ErrUpstream, err)
 		}
-	}
-
-	mapped := make([]types.OperatorWithKeys, 0, len(ops))
-	for _, op := range ops {
-		assigned := assignments[op.Operator]
-		if len(op.Keys) == 0 {
-			mapped = append(mapped, types.OperatorWithKeys{
-				Operator: op.Operator,
-				Keys: []types.Key{{
-					Payload: append([]byte(nil), assigned...),
-				}},
-			})
+		if len(rows) == 0 {
 			continue
 		}
-		keys := make([]types.Key, 0, len(op.Keys))
-		for _, key := range op.Keys {
-			keys = append(keys, types.Key{
-				Tag:     key.Tag,
-				Payload: append([]byte(nil), assigned...),
-			})
-		}
-		mapped = append(mapped, types.OperatorWithKeys{Operator: op.Operator, Keys: keys})
+		out = append(out, types.OperatorVotingPower{
+			Operator:        op,
+			VotingPowerGwei: rows[0].EffectiveBalance,
+		})
+		matched++
 	}
-	return mapped, nil
+
+	p.logger.InfoContext(ctx, "computed voting powers (mock mode)",
+		"epoch", epoch,
+		"slot", stateSlot,
+		"matched_validators", matched,
+		"operator_count", len(out),
+	)
+	return out, EvaluationMeta{Epoch: epoch, Slot: stateSlot, MatchedValidator: matched, OperatorCount: len(out)}, nil
 }
 
-func (p *Provider) loadMockMapPubkeys() ([][]byte, error) {
-	p.mockMapOnce.Do(func() {
-		raw, err := os.ReadFile(p.mockMapPath)
-		if err != nil {
-			p.mockMapErr = err
-			return
+func sortedOperators(ops []types.OperatorWithKeys) []common.Address {
+	if len(ops) == 0 {
+		return nil
+	}
+	seen := make(map[common.Address]struct{}, len(ops))
+	out := make([]common.Address, 0, len(ops))
+	for _, op := range ops {
+		if _, ok := seen[op.Operator]; ok {
+			continue
 		}
-
-		var rows []hoodiValidatorRecord
-		if err := json.Unmarshal(raw, &rows); err != nil {
-			p.mockMapErr = err
-			return
-		}
-		out := make([][]byte, 0, len(rows))
-		for _, row := range rows {
-			normalized, err := NormalizeBLSPubkeyHex(row.Pubkey)
-			if err != nil {
-				p.mockMapErr = err
-				return
-			}
-			pk, err := hex.DecodeString(normalized)
-			if err != nil {
-				p.mockMapErr = err
-				return
-			}
-			out = append(out, pk)
-		}
-		if len(out) == 0 {
-			p.mockMapErr = errors.New("empty hoodi validator key set")
-			return
-		}
-		p.mockMapPubkeys = out
+		seen[op.Operator] = struct{}{}
+		out = append(out, op.Operator)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Hex() < out[j].Hex()
 	})
-
-	return p.mockMapPubkeys, p.mockMapErr
+	return out
 }
 
 func chunkStrings(items []string, size int) [][]string {
@@ -350,12 +281,65 @@ func chunkStrings(items []string, size int) [][]string {
 	return out
 }
 
-func (p *Provider) fetchValidatorsForState(ctx context.Context, stateID string, ids []string) ([]types.BeaconValidator, error) {
+func (p *Provider) fetchValidatorsAtOrBeforeSlot(ctx context.Context, requestedSlot, finalizedSlot uint64, ids []string) ([]types.BeaconValidator, uint64, error) {
+	stateID, stateSlot, err := p.resolveStateIDAtOrBeforeSlot(ctx, requestedSlot, finalizedSlot, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	validators, err := p.fetchValidatorsByStateID(ctx, stateID, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	return validators, stateSlot, nil
+}
+
+func (p *Provider) resolveStateIDAtOrBeforeSlot(ctx context.Context, requestedSlot, finalizedSlot uint64, probeIDs []string) (string, uint64, error) {
+	maxLookback := maxStateLookback
+	if requestedSlot < maxLookback {
+		maxLookback = requestedSlot
+	}
+
+	if len(probeIDs) == 0 {
+		probeIDs = []string{"0"}
+	} else if len(probeIDs) > 1 {
+		probeIDs = probeIDs[:1]
+	}
+
+	for lookedBack := uint64(0); lookedBack <= maxLookback; lookedBack++ {
+		candidate := requestedSlot - lookedBack
+		stateID := strconv.FormatUint(candidate, 10)
+
+		_, err := p.fetchValidatorsByStateID(ctx, stateID, probeIDs)
+		if err == nil {
+			return stateID, candidate, nil
+		}
+		if !isNotFound(err) {
+			return "", 0, err
+		}
+		p.logger.WarnContext(ctx, "validator state missing, decrementing slot", "state_id", stateID, "requested_slot", requestedSlot)
+	}
+
+	p.logger.WarnContext(
+		ctx,
+		"falling back to finalized beacon state for validator lookup",
+		"requested_slot",
+		requestedSlot,
+		"finalized_slot",
+		finalizedSlot,
+	)
+	_, err := p.fetchValidatorsByStateID(ctx, "finalized", probeIDs)
+	if err != nil {
+		return "", 0, err
+	}
+	return "finalized", finalizedSlot, nil
+}
+
+func (p *Provider) fetchValidatorsByStateID(ctx context.Context, stateID string, ids []string) ([]types.BeaconValidator, error) {
+	chunks := chunkStrings(ids, idChunkSize)
 	validators := make([]types.BeaconValidator, 0, len(ids))
-	for _, chunk := range chunkStrings(ids, idChunkSize) {
+	for _, chunk := range chunks {
 		rows, err := p.beacon.GetValidatorsByState(ctx, stateID, nil, chunk)
 		if err != nil {
-			p.logger.WarnContext(ctx, "failed to fetch validators by state", "state_id", stateID, "chunk_size", len(chunk), "error", err)
 			return nil, err
 		}
 		validators = append(validators, rows...)
@@ -363,27 +347,6 @@ func (p *Provider) fetchValidatorsForState(ctx context.Context, stateID string, 
 	return validators, nil
 }
 
-func (p *Provider) fetchValidatorsAtOrBeforeSlot(ctx context.Context, requestedSlot uint64, ids []string) ([]types.BeaconValidator, uint64, error) {
-	for candidate := requestedSlot; ; candidate-- {
-		stateID := strconv.FormatUint(candidate, 10)
-		validators, err := p.fetchValidatorsForState(ctx, stateID, ids)
-		if err == nil {
-			return validators, candidate, nil
-		}
-		if !isNotFound(err) {
-			return nil, 0, err
-		}
-		p.logger.WarnContext(ctx, "validator state missing, decrementing slot", "state_id", stateID, "requested_slot", requestedSlot)
-		if candidate == 0 {
-			return nil, 0, fmt.Errorf("%w: no validator state at or below slot=%d", ErrEpochNotFinalized, requestedSlot)
-		}
-	}
-}
-
 func isNotFound(err error) bool {
-	if beaconapi.IsNotFoundError(err) {
-		return true
-	}
-	var nf notFoundError
-	return errors.As(err, &nf) && nf.NotFound()
+	return beaconapi.IsNotFoundError(err)
 }
