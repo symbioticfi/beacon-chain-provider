@@ -191,6 +191,8 @@ cat > "${INSERT_FILE}" <<'EOF'
     command:
       - --config
       - /app/config.yaml
+    ports:
+      - 50051:50051
     volumes:
       - ./deploy-data/beacon-vp.config.yaml:/app/config.yaml:ro
     depends_on:
