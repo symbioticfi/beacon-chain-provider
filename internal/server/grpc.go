@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 
-	votingpowerv1 "github.com/symbioticfi/beacon-chain-provider/api/proto/votingpower/v1"
+	votingpowerv1 "github.com/symbioticfi/beacon-chain-provider/api/gen/votingpower/v1"
 	"github.com/symbioticfi/beacon-chain-provider/internal/provider"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

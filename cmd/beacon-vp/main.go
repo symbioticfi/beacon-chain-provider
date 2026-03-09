@@ -16,7 +16,7 @@ import (
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	votingpowerv1 "github.com/symbioticfi/beacon-chain-provider/api/proto/votingpower/v1"
+	votingpowerv1 "github.com/symbioticfi/beacon-chain-provider/api/gen/votingpower/v1"
 	"github.com/symbioticfi/beacon-chain-provider/internal/beacon"
 	"github.com/symbioticfi/beacon-chain-provider/internal/keyregistry"
 	"github.com/symbioticfi/beacon-chain-provider/internal/provider"

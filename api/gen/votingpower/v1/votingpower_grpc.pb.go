@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: api/proto/votingpower/v1/votingpower.proto
+// source: v1/votingpower.proto
 
 package votingpowerv1
 
@@ -25,7 +25,10 @@ const (
 // VotingPowerProviderServiceClient is the client API for VotingPowerProviderService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// VotingPowerProviderService is implemented by external voting power providers.
 type VotingPowerProviderServiceClient interface {
+	// GetVotingPowersAt returns voting power for operators at a specific timestamp.
 	GetVotingPowersAt(ctx context.Context, in *GetVotingPowersAtRequest, opts ...grpc.CallOption) (*GetVotingPowersAtResponse, error)
 }
 
@@ -50,7 +53,10 @@ func (c *votingPowerProviderServiceClient) GetVotingPowersAt(ctx context.Context
 // VotingPowerProviderServiceServer is the server API for VotingPowerProviderService service.
 // All implementations must embed UnimplementedVotingPowerProviderServiceServer
 // for forward compatibility.
+//
+// VotingPowerProviderService is implemented by external voting power providers.
 type VotingPowerProviderServiceServer interface {
+	// GetVotingPowersAt returns voting power for operators at a specific timestamp.
 	GetVotingPowersAt(context.Context, *GetVotingPowersAtRequest) (*GetVotingPowersAtResponse, error)
 	mustEmbedUnimplementedVotingPowerProviderServiceServer()
 }
@@ -118,5 +124,5 @@ var VotingPowerProviderService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "api/proto/votingpower/v1/votingpower.proto",
+	Metadata: "v1/votingpower.proto",
 }

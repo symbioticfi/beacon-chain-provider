@@ -23,6 +23,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Verify Votingpower Stubs
+        run: |
+          ./scripts/update-votingpower-stubs.sh
+          git diff --exit-code -- api/gen/votingpower/v1
+
       - name: Run Tests
         run: go test ./...
 
