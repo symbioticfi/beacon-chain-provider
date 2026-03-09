@@ -27,7 +27,7 @@ cp "$SOURCE_PROTO" "$STAGED_PROTO"
 
 perl -0pi -e "s|option go_package = \".*\";|option go_package = \"$LOCAL_GO_PACKAGE\";|" "$STAGED_PROTO"
 
-if ! rg -qxF "option go_package = \"$LOCAL_GO_PACKAGE\";" "$STAGED_PROTO"; then
+if ! grep -qxF "option go_package = \"$LOCAL_GO_PACKAGE\";" "$STAGED_PROTO"; then
   echo "failed to rewrite go_package in staged proto" >&2
   exit 1
 fi
