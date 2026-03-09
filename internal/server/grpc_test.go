@@ -9,7 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
-	votingpowerv1 "github.com/symbioticfi/beacon-chain-provider/api/proto/votingpower/v1"
+	votingpowerv1 "github.com/symbioticfi/beacon-chain-provider/api/gen/votingpower/v1"
 	"github.com/symbioticfi/beacon-chain-provider/internal/provider"
 	"github.com/symbioticfi/beacon-chain-provider/internal/testutil"
 	"github.com/symbioticfi/beacon-chain-provider/internal/types"

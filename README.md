@@ -44,8 +44,13 @@ go test ./...
 
 ## API
 
-Proto is currently in `api/proto/votingpower/v1/votingpower.proto` and generated stubs are in `api/proto/votingpower/v1`.
-This provider-local proto is temporary; in future it will live in the relay repository and this provider will import relay-published stubs directly.
+The source proto is pinned from `github.com/symbioticfi/relay` at `votingpower/proto/v1/votingpower.proto`.
+Generated local stubs are committed in `api/gen/votingpower/v1`.
+Refresh them with:
+
+```bash
+./scripts/update-votingpower-stubs.sh
+```
 
 ## Demo Network (super-sum submodule)
 
