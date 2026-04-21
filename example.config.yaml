@@ -1,0 +1,19 @@
+grpc:
+  listen: ":9090"
+
+beacon:
+  node_url: "http://localhost:5052"
+
+ethereum:
+  rpc_url: "http://localhost:8545"
+
+key_registry:
+  address: "0x0000000000000000000000000000000000000001"
+  chain_id: 1
+  key_tag: 32
+
+timeouts:
+  request: 5s
+
+log:
+  level: "info"

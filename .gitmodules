@@ -1,0 +1,3 @@
+[submodule "super-sum"]
+	path = super-sum
+	url = https://github.com/symbioticfi/symbiotic-super-sum.git
