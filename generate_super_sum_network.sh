@@ -22,7 +22,6 @@ EXTERNAL_VP_GRPC_URL="${EXTERNAL_VP_GRPC_URL:-beacon-vp-provider:50051}"
 BEACON_VP_IMAGE="${BEACON_VP_IMAGE:-beacon-vp-local:dev}"
 BEACON_NODE_URL="${BEACON_NODE_URL:-https://ethereum-hoodi-beacon-api.publicnode.com}"
 KEY_REGISTRY_ADDRESS="${KEY_REGISTRY_ADDRESS:-0xe1557A820E1f50dC962c3392b875Fe0449eb184F}"
-RELAY_IMAGE="symbioticfi/relay:local"
 EXTERNAL_VP_PROVIDER_ID="0x${EXTERNAL_VP_ADDRESS#0x}"
 EXTERNAL_VP_PROVIDER_ID="${EXTERNAL_VP_PROVIDER_ID:0:22}"
 
@@ -50,12 +49,12 @@ if [ ! -f "${COMPOSE_FILE}" ]; then
   die "missing generated compose file: ${COMPOSE_FILE}"
 fi
 
-if ! docker image inspect "${RELAY_IMAGE}" >/dev/null 2>&1; then
-  die "missing local relay image ${RELAY_IMAGE}
-build/tag it before running this script"
+# Relay image/tag is defined by the super-sum submodule (generate_network.sh: RELAY_IMAGE_TAG)
+# and is already baked into the generated compose. Read it for reporting; do not override it.
+RELAY_IMAGE="$(grep -m1 -oE 'symbioticfi/relay:[^[:space:]]+' "${COMPOSE_FILE}" || true)"
+if [ -z "${RELAY_IMAGE}" ]; then
+  die "no symbioticfi/relay image found in generated compose: ${COMPOSE_FILE}"
 fi
-
-perl -i -pe "s#image:\\s*symbioticfi/relay:[^\\s]+#image: ${RELAY_IMAGE}#g" "${COMPOSE_FILE}"
 
 cat > "${PROVIDER_CONFIG}" <<EOF
 grpc:
@@ -237,6 +236,6 @@ mv "${COMPOSE_FILE}.tmp" "${COMPOSE_FILE}"
 rm -f "${INSERT_FILE}"
 
 echo "[INFO] Patched ${COMPOSE_FILE} with post-genesis external voting power registration."
-echo "[INFO] Relay image set to ${RELAY_IMAGE}."
+echo "[INFO] Relay image (from super-sum): ${RELAY_IMAGE}."
 echo "[INFO] Start network with:"
 echo "  docker compose --project-directory ${NETWORK_DIR} up -d --build"
